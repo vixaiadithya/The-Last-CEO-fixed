@@ -1,0 +1,24 @@
+# Backend (FastAPI + XGBoost inference) — pinned for reproducible setup.
+#
+# IMPORTANT: scikit-learn is pinned to 1.6.1 because the bundled model
+# artifacts in models/*.joblib were serialized with that version. Newer
+# scikit-learn (1.7+) removes internal classes the pickles reference and will
+# fail to load them. If you retrain the models, re-pin to your training version.
+#
+# Setup:
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#   .venv/bin/python -m uvicorn app:app --port 8000
+#
+# macOS note: xgboost needs the OpenMP runtime — `brew install libomp`.
+
+fastapi
+uvicorn
+scikit-learn==1.6.1
+xgboost
+pandas
+numpy
+sqlalchemy
+joblib
+pydantic
+python-dotenv
