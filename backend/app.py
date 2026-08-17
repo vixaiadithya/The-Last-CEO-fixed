@@ -321,46 +321,59 @@ def explain_prediction(request: PredictionRequest, top_n: int = 7):
     """
     import scipy.sparse
 
-    df = build_model_frame(request.dict(), 1.0)
+    base_dict = request.dict()
+    df = build_model_frame(base_dict, 1.0)
     X = revenue_preprocessor.transform(df)
     X_dense = X.toarray() if scipy.sparse.issparse(X) else np.asarray(X)
 
-    names = list(revenue_preprocessor.get_feature_names_out())
     annual_rev = float(revenue_model.predict(X_dense)[0])
     
     # Base value is the dataset mean revenue_impact (~$2.59M annual)
     base_value = 2591989.0 
     diff = annual_rev - base_value
     
-    # Use global feature importances from the XGBoost model
-    importances = revenue_model.feature_importances_
-
+    # Perturbation-based marginal contribution
+    features_to_test = [
+        ('ai_investment_usd', base_dict['ai_investment_usd'] * 0.9),
+        ('automation_rate', max(0, base_dict['automation_rate'] - 10)),
+        ('employee_ai_training_hours', max(0, base_dict['employee_ai_training_hours'] - 20)),
+        ('ai_maturity_score', max(0, base_dict['ai_maturity_score'] - 10)),
+        ('ai_adoption_level', max(0, base_dict['ai_adoption_level'] - 1.0)),
+        ('deployment_count', max(0, base_dict['deployment_count'] - 2)),
+    ]
+    
+    total_abs_diff = 0
+    diffs = {}
+    
+    for feat, new_val in features_to_test:
+        test_dict = base_dict.copy()
+        test_dict[feat] = new_val
+        df_test = build_model_frame(test_dict, 1.0)
+        X_test = revenue_preprocessor.transform(df_test)
+        X_dense_test = X_test.toarray() if scipy.sparse.issparse(X_test) else np.asarray(X_test)
+        test_rev = float(revenue_model.predict(X_dense_test)[0])
+        
+        impact = annual_rev - test_rev
+        diffs[feat] = impact
+        total_abs_diff += abs(impact)
+        
     buckets = {}
-    for name, imp, val in zip(names, importances, X_dense[0]):
-        raw = name.split("__", 1)[-1]
-        if raw.startswith("industry_"):
-            label = "Industry"
-        elif raw.startswith("country_"):
-            label = "Country"
+    for feat, impact in diffs.items():
+        label = FEATURE_LABELS.get(feat, feat).replace('_', ' ').title()
+        if total_abs_diff > 0:
+            buckets[label] = (abs(impact) / total_abs_diff) * diff
         else:
-            label = FEATURE_LABELS.get(raw, raw)
+            buckets[label] = 0
             
-        impact_score = imp * abs(val) if val != 0 else 0
-        buckets[label] = buckets.get(label, 0.0) + impact_score
-
-    total_score = sum(buckets.values())
-    if total_score > 0:
-        for k in buckets:
-            buckets[k] = (buckets[k] / total_score) * diff
-    else:
+    if total_abs_diff == 0:
         buckets["AI Investment"] = diff
         
-    contributions = [{"feature": k, "impact": round(v / 4.0, 2)} for k, v in buckets.items()]
+    contributions = [{"feature": k, "impact": round(v / 2.0, 2)} for k, v in buckets.items()]
     contributions.sort(key=lambda c: abs(c["impact"]), reverse=True)
 
     return {
-        "base_value": round(base_value / 4.0, 2),
-        "prediction": round(annual_rev / 4.0, 2),
+        "base_value": round(base_value / 2.0, 2),
+        "prediction": round(annual_rev / 2.0, 2),
         "contributions": contributions[:top_n],
     }
 

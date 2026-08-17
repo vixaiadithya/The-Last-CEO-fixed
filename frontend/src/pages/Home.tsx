@@ -112,6 +112,24 @@ const Typewriter = ({ text, delay = 0, speed = 40, className, onComplete }: any)
 export const Home = () => {
   const navigate = useNavigate();
   const actions = useGameStore((s) => s.actions);
+  const state = useGameStore((s) => s.state);
+  
+  const runAutoPlayValidation = async () => {
+    actions.initializeGame({
+      name: "TestCorp",
+      industry: "Technology",
+      country: "United States",
+      aiInvestment: 10000000,
+      employees: 50,
+      automationRate: 100,
+      trainingHours: 500,
+      startingBudget: 10000000,
+      aiMaturityScore: 80,
+      foundedYear: 2025
+    });
+    navigate('/engine');
+  };
+  
   const [qIndex, setQIndex] = useState(0);
   const [inputValue, setInputValue] = useState<string | number>('');
   const [formData, setFormData] = useState<Partial<CompanyProfile>>({
@@ -133,6 +151,7 @@ export const Home = () => {
   const [avatarIntroStage, setAvatarIntroStage] = useState(0);
 
   useEffect(() => {
+    (window as any).runAutoPlayValidation = runAutoPlayValidation;
     if (window.speechSynthesis.getVoices().length > 0) {
       setVoicesLoaded(true);
     }

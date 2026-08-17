@@ -39,6 +39,8 @@ export interface GameState {
   gameResult: 'victory' | 'bankruptcy' | null;
   history: YearHistory[];
   emergencyQuarters: number;
+  employeesHired: number;
+  employeesLost: number;
 }
 
 export interface YearHistory {
@@ -46,9 +48,14 @@ export interface YearHistory {
   quarter?: number;
   revenue: number;
   budget: number;
-  roi: number;
+  roi: number; // Cumulative ROI
+  decisionRoi?: number; // Decision ROI
   morale: number;
   employees?: number;
+  employeesHired?: number;
+  employeesLost?: number;
+  appliedRevenue?: number;
+  riskScore?: number;
   decision?: string;
 }
 

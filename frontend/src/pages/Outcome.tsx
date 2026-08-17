@@ -155,6 +155,41 @@ export const Outcome = () => {
   const actions = useGameStore((s) => s.actions);
 
   const isVictory = state.gameResult === 'victory';
+  const isBankrupt = state.gameResult === 'bankruptcy';
+
+  // --- CEO SCORING LOGIC ---
+  const totalHired = state.history.reduce((sum, h) => sum + (h.employeesHired || 0), 0);
+  const totalLost = state.history.reduce((sum, h) => sum + (h.employeesLost || 0), 0);
+  
+  let empScore = state.morale;
+  const lossRatio = totalHired > 0 ? totalLost / totalHired : (totalLost > 0 ? 1 : 0);
+  if (lossRatio > 0.5) empScore -= (lossRatio - 0.5) * 40;
+  empScore = Math.max(0, Math.min(100, Math.round(empScore)));
+
+  let finScore = 50 + (state.roi / 2);
+  finScore += (state.budget / 1000000);
+  if (isBankrupt) finScore = Math.min(finScore, 30);
+  finScore = Math.max(0, Math.min(100, Math.round(finScore)));
+
+  const avgRiskScore = state.history.reduce((sum, h) => sum + (h.riskScore || 50), 0) / Math.max(1, state.history.length);
+  let opScore = 100 - avgRiskScore;
+  opScore -= (state.emergencyQuarters * 10);
+  if (isBankrupt) opScore = Math.min(opScore, 30);
+  opScore = Math.max(0, Math.min(100, Math.round(opScore)));
+
+  let innScore = (company?.automationRate || 0) * 0.5 + (company?.aiMaturityScore || 0) * 0.5;
+  innScore = Math.max(0, Math.min(100, Math.round(innScore)));
+
+  const overallScore = (empScore + finScore + opScore + innScore) / 4;
+
+  const getGrade = () => {
+    if (isBankrupt || overallScore < 40 || (state.roi < 0 && state.morale < 20)) return "F";
+    if (overallScore < 60) return "C";
+    if (overallScore < 75) return "B";
+    if (overallScore < 85) return "A";
+    return "A+";
+  };
+  // -------------------------
 
   // State for animations
   const [valTicker, setValTicker] = useState(0);
@@ -164,6 +199,11 @@ export const Outcome = () => {
 
   // Determine achieved ending
   const getAchievedEndingId = (): string => {
+    if (getGrade() === 'F') {
+      if (state.roi >= 50 || state.morale >= 80) return 'talent_acquired';
+      return 'crash_burn';
+    }
+
     if (state.gameResult === 'victory') {
       if (company?.industry?.toLowerCase() === 'technology' && state.roi >= 150) {
         return 'rogue_ai';
@@ -217,20 +257,6 @@ export const Outcome = () => {
     { title: "Most Automation", val: `${company?.automationRate || 0}%` },
     { title: "Peak Morale", val: `${Math.max(...state.history.map(h => h.morale), state.morale)}%` },
   ];
-
-  const getGrade = () => {
-    if (state.gameResult === 'bankruptcy') return state.roi < -20 ? "F" : "D";
-    if (achievedEndingId === 'unicorn') return "A+";
-    if (achievedEndingId === 'ipo') return "A";
-    if (achievedEndingId === 'acquisition') return "B+";
-    if (achievedEndingId === 'rogue_ai') return "S";
-    return "B";
-  };
-
-  const aiScore = Math.min(100, (company?.aiMaturityScore || 0) + 20);
-  const finScore = state.gameResult === 'bankruptcy' ? 18 : Math.max(0, Math.min(100, 50 + (state.roi / 5) + (state.budget / 1000000)));
-  const innScore = Math.min(100, (company?.automationRate || 0) + (state.gameResult === 'bankruptcy' ? 50 : 30));
-  const opScore = state.gameResult === 'bankruptcy' ? 31 : Math.min(100, 40 + (state.level * 10));
 
   const timeline = [];
   timeline.push("2025: Startup Founded");
@@ -457,17 +483,6 @@ export const Outcome = () => {
        return insights;
     };
 
-    const isBankrupt = state.gameResult === 'bankruptcy';
-
-    const getGrade = () => {
-      if (isBankrupt) return state.roi < -20 ? "F" : "D";
-      if (achievedEndingId === 'unicorn') return "A+";
-      if (achievedEndingId === 'ipo') return "A";
-      if (achievedEndingId === 'acquisition') return "B+";
-      if (achievedEndingId === 'rogue_ai') return "S";
-      return "B";
-    };
-
     const getBoardDebriefs = () => {
       const debriefs = [];
       if (achievedEndingId === 'unicorn') {
@@ -499,14 +514,6 @@ export const Outcome = () => {
       return debriefs;
     };
 
-    let aiScore = Math.min(100, (company?.aiMaturityScore || 0) + 20);
-    if (isBankrupt) aiScore = Math.min(aiScore, 78);
-    
-    const finScore = isBankrupt ? 18 : Math.max(0, Math.min(100, 50 + (state.roi / 5) + (state.budget / 1000000)));
-    const innScore = Math.min(100, (company?.automationRate || 0) + (isBankrupt ? 50 : 30));
-    const empScore = state.morale;
-    const opScore = isBankrupt ? 31 : Math.min(100, 40 + (state.level * 10));
-    
     // Create Timeline
     const timelineEvents = [];
     timelineEvents.push(`2024: Startup Founded - Seed Capital $${(company?.startingBudget||1000000)/1000000}M`);
@@ -741,13 +748,13 @@ Risk Appetite : ${state.roi < 0 || state.budget < 2000000 ? "High" : "Moderate"}
 
           heading("CEO Legacy Score"),
           monoBlock(`Innovation        ${renderBar(innScore)}
-Leadership        ${renderBar(isBankrupt ? 22 : 88)}
-Financial Skill   ${renderBar(finScore)}
 People Management ${renderBar(empScore)}
+Financial Skill   ${renderBar(finScore)}
 Risk Control      ${renderBar(opScore)}
+Overall Score     ${renderBar(overallScore)}
 
 Overall Grade:    ${getGrade()}
-Title:            ${getGrade() === 'A+' ? 'Legendary Visionary' : getGrade() === 'A' ? 'Corporate Titan' : getGrade() === 'B+' ? 'Strategic Leader' : getGrade() === 'B' ? 'Ambitious Innovator' : 'Failed Visionary'}`),
+Title:            ${getGrade() === 'A+' ? 'Legendary Visionary' : getGrade() === 'A' ? 'Corporate Titan' : getGrade() === 'B' ? 'Strategic Leader' : getGrade() === 'C' ? 'Ambitious Innovator' : 'Failed Visionary'}`),
           divider(),
 
           heading("Executive Letter"),

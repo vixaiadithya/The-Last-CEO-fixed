@@ -22,7 +22,40 @@ export const Engine = () => {
   const state = useGameStore((s) => s.state);
   const company = useGameStore((s) => s.company);
   const currentReport = useGameStore((s) => s.currentReport);
-  const { isLoading, rollDecisions } = useGameLoop();
+  const { isLoading, rollDecisions, advanceQuarter, makeQuarterDecision } = useGameLoop();
+
+  useEffect(() => {
+      (window as any).__runAutoPlayValidation = async () => {
+        try {
+          let isGameOver = false;
+          let limit = 0;
+          let log = [];
+          while (!isGameOver && limit < 25) {
+            limit++;
+            const state = useGameStore.getState().state;
+            const decisions = state.currentDecisions;
+            log.push(`Iter ${limit}, decisions: ${decisions?.length}`);
+            if (!decisions || decisions.length === 0) {
+                log.push("No decisions, breaking.");
+                break;
+            }
+            await makeQuarterDecision(decisions[0]);
+            if (useGameStore.getState().state.isGameOver) {
+              log.push("Game over true.");
+              isGameOver = true;
+            }
+          }
+          (window as any).__TEST_RESULTS__ = {
+            history: useGameStore.getState().state.history,
+            state: useGameStore.getState().state,
+            debugLog: log
+          };
+          console.log("TEST FINISHED", (window as any).__TEST_RESULTS__);
+        } catch (err: any) {
+          (window as any).__TEST_RESULTS__ = { error: err.toString() };
+        }
+      };
+  }, [advanceQuarter, makeQuarterDecision]);
 
   useEffect(() => {
     if (company) {

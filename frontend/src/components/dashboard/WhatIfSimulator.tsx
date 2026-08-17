@@ -314,8 +314,16 @@ Model Outputs:
   const roi = m ? Math.round(m.roi) : null;
   const roiColor = roi === null ? 'text-slate-400' : roi >= 0 ? 'text-emerald-400' : 'text-rose-400';
 
+  // Apply the same Startup Pacing Governor used in useGameLoop.ts
+  const previousQuarterRevenue = state.revenue / 2; 
+  const maxQuarterlyAiGain = previousQuarterRevenue > 0 ? Math.max(previousQuarterRevenue * 0.5, 50000) : 50000;
+  const rawAnnualMlRevenueImpact = m ? m.revenue_impact : 0;
+  const rawQuarterlyMlRevenueImpact = rawAnnualMlRevenueImpact / 2.0;
+  const appliedQuarterlyAiRevenue = Math.min(Math.max(-50000, rawQuarterlyMlRevenueImpact), maxQuarterlyAiGain);
+  const appliedAnnualAiRevenue = appliedQuarterlyAiRevenue * 2;
+
   const metricTiles = [
-    { icon: TrendingUp, label: 'Predicted Revenue', value: m ? m.revenue_impact : null, format: (v: number) => `$${(v / 1000000).toFixed(2)}M`, trendMode: 'higher-is-better' as const, color: 'text-cyan-400' },
+    { icon: TrendingUp, label: 'Applied AI Revenue', value: m ? appliedAnnualAiRevenue : null, format: (v: number) => `$${(v / 1000000).toFixed(2)}M`, trendMode: 'higher-is-better' as const, color: 'text-cyan-400' },
     { icon: Gauge, label: 'Quarterly ROI', value: roi, format: (v: number) => `${Math.round(v)}%`, trendMode: 'higher-is-better' as const, color: roiColor },
     { icon: Cpu, label: 'Productivity Gain', value: m ? m.productivity_gain : null, format: (v: number) => `${v.toFixed(1)}%`, trendMode: 'higher-is-better' as const, color: 'text-purple-400' },
     { icon: ShieldAlert, label: 'Risk Score', value: m ? m.risk_score : null, format: (v: number) => {

@@ -5,6 +5,8 @@ import { useGameStore } from '@/store/gameStore';
 import type { LLMReport } from '@/types';
 import { DECISIONS, EVENTS, getDynamicCost } from '@/data/decisions';
 
+const GAME_QUARTERS_PER_YEAR = 2;
+
 export const useGameLoop = () => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
@@ -112,11 +114,17 @@ export const useGameLoop = () => {
       actions.setCurrentEvent(event);
       
       const freshState = useGameStore.getState().state;
+      // Scale event impact based on company revenue so startups don't get instantly bankrupted
+      // Assuming 2M is a "standard" scaling point for the raw event values
+      const revenueScale = Math.max(0.05, Math.min(2.0, freshState.revenue / 2000000));
+      const scaledBudget = event.impact.budget * revenueScale;
+      const scaledRevenue = (event.impact.revenue || 0) * revenueScale;
+
       actions.updateGameState({
-        budget: freshState.budget + event.impact.budget,
+        budget: freshState.budget + scaledBudget,
         roi: freshState.roi + event.impact.roi,
         morale: Math.max(Math.min(freshState.morale + event.impact.morale, 100), 0),
-        revenue: freshState.revenue + (event.impact.revenue || 0)
+        revenue: freshState.revenue + scaledRevenue
       });
       return event;
     }
@@ -206,7 +214,7 @@ export const useGameLoop = () => {
       else if (industry === 'logistics') { expectedRevenuePerEmployee = 300000; organicBase = 6000; }
       
       // Base revenue grows organically. Startups don't get full expected revenue instantly.
-      const previousQuarterRevenue = freshState.revenue / 4; 
+      const previousQuarterRevenue = freshState.revenue / GAME_QUARTERS_PER_YEAR; 
       const pmfMultiplier = previousQuarterRevenue > 1000000 ? 1 : (previousQuarterRevenue > 0 ? 0.25 : 0.05);
       
       const employeeRevenueContribution = freshState.employees * (expectedRevenuePerEmployee / 8) * pmfMultiplier;
@@ -214,7 +222,7 @@ export const useGameLoop = () => {
       
       // 1. RAW ML PREDICTION: Annual incremental revenue impact predicted by the XGBoost model.
       const rawAnnualMlRevenueImpact = metrics.revenue_impact || 0;
-      const rawQuarterlyMlRevenueImpact = rawAnnualMlRevenueImpact / 4.0;
+      const rawQuarterlyMlRevenueImpact = rawAnnualMlRevenueImpact / GAME_QUARTERS_PER_YEAR;
       
       // 2. GAME BUSINESS RULE (Startup Pacing Governor):
       // The XGBoost model was trained on mature enterprise dataset records ($4.8M average AI investment).
@@ -242,7 +250,7 @@ export const useGameLoop = () => {
           growthRate = previousQuarterRevenue > 0 ? ((quarterlyRevenue - previousQuarterRevenue) / previousQuarterRevenue) * 100 : 0;
       }
 
-      const annualizedRevenue = quarterlyRevenue * 4;
+      const annualizedRevenue = quarterlyRevenue * GAME_QUARTERS_PER_YEAR;
       const revenuePerEmployee = annualizedRevenue / Math.max(1, freshState.employees);
 
       // Enterprise Tax
@@ -258,20 +266,20 @@ export const useGameLoop = () => {
       const scalingCosts = quarterlyRevenue * 0.40; // 40% COGS
       const baseFixedCosts = 50000 + (freshState.employees * 5000); // Startup-friendly base costs
       const costs = (baseFixedCosts * enterpriseCostMultiplier) + scalingCosts; 
-      // Fixed salary bug: $45,000 annual per employee -> $11,250 per quarter per employee
-      const salaries = (freshState.employees * 45000) / 4;
+      // Fixed salary bug: $45,000 annual per employee -> quarterly equivalent
+      const salaries = (freshState.employees * 45000) / GAME_QUARTERS_PER_YEAR;
 
       const totalAiInvestment = freshCompany?.aiInvestment || 1;
       const amortizedInvestment = totalAiInvestment * 0.20;
-      const quarterAiInvestment = amortizedInvestment / 4;
+      const quarterAiInvestment = 0; // Removed double-counting of AI Investment since it's paid upfront in cash
       
-      const quarterExpenses = costs + salaries + quarterAiInvestment;
+      const quarterExpenses = costs + salaries;
       const quarterProfit = quarterlyRevenue - quarterExpenses;
       
       // STRICT BUDGET EQUATION
       const nextBudget = freshState.budget + quarterProfit;
 
-      const totalAnnualExpenses = quarterExpenses * 4;
+      const totalAnnualExpenses = quarterExpenses * GAME_QUARTERS_PER_YEAR;
       
       // ROI CALCULATIONS
       const quarterRoi = Math.round((quarterProfit / quarterExpenses) * 100);
@@ -282,6 +290,8 @@ export const useGameLoop = () => {
 
       let nextEmployees = freshState.employees;
       let nextMorale = freshState.morale;
+      let employeesLost = 0;
+      let employeesHired = 0;
 
       // WORKFORCE & MORALE (Dynamic Penalties)
       if ((freshCompany?.automationRate || 0) > 60) {
@@ -290,6 +300,7 @@ export const useGameLoop = () => {
              const laidOff = Math.ceil(nextEmployees * automationFactor);
              const layoffPercentage = (laidOff / Math.max(1, nextEmployees)) * 100;
              nextEmployees -= laidOff;
+             employeesLost = laidOff;
              
              if (layoffPercentage >= 30) nextMorale -= 35;
              else if (layoffPercentage >= 15) nextMorale -= 20;
@@ -302,11 +313,12 @@ export const useGameLoop = () => {
       if (annualizedRevenue > nextEmployees * expectedRevenuePerEmployee && (freshCompany?.automationRate || 0) < 95) {
           const neededStaff = Math.floor((annualizedRevenue / expectedRevenuePerEmployee) - nextEmployees);
           
-          const annualCostPerEmployee = (45000 * 4) + (5000 * 4); // Salary + fixed cost scaling
+          const annualCostPerEmployee = 45000 + (5000 * GAME_QUARTERS_PER_YEAR); // Salary + fixed cost scaling
           const maxAffordableHires = Math.max(0, Math.floor(nextBudget / annualCostPerEmployee));
           
           const actualHires = Math.min(Math.ceil(neededStaff * 0.10), maxAffordableHires);
           nextEmployees += actualHires;
+          employeesHired = actualHires;
       }
 
       if (nextEmployees <= 0) nextEmployees = 0;
@@ -411,7 +423,7 @@ export const useGameLoop = () => {
         valuation: valuation
       });
       
-      return { nextBudget, calculatedRoi: cumulativeRoi, annualizedRevenue, nextEmployees, nextMorale };
+      return { nextBudget, calculatedRoi: cumulativeRoi, annualizedRevenue, nextEmployees, nextMorale, employeesLost, employeesHired, decisionRoi: quarterRoi, appliedRevenue: appliedQuarterlyAiRevenue, riskScore: metrics.risk_score || 0, opCosts: costs, payroll: salaries };
     } catch (err) {
       console.warn('Backend API offline. Could not fetch XGBoost prediction.', err);
       setError('Failed to connect to ML Backend.');
@@ -425,9 +437,12 @@ export const useGameLoop = () => {
     setIsLoading(true);
     setError(null);
 
+    const freshState = useGameStore.getState().state;
+    const freshCompany = useGameStore.getState().company;
+
     const baseDecision = DECISIONS.find(d => d.id === decisionId);
     if (!baseDecision) return;
-    const dynamicCost = getDynamicCost(baseDecision.cost, state.revenue);
+    const dynamicCost = getDynamicCost(baseDecision.cost, freshState.revenue);
     const decision = { ...baseDecision, cost: dynamicCost };
 
     actions.setLastDecisionOutcome({
@@ -444,17 +459,17 @@ export const useGameLoop = () => {
     });
 
     try {
-      const preBudget = state.budget - decision.cost;
-      const nextEmployees = state.employees + decision.employeeGain;
+      const preBudget = freshState.budget - decision.cost;
+      const nextEmployees = Math.max(0, freshState.employees + decision.employeeGain);
 
       let decisionMoraleImpact = decision.moraleImpact;
       if (decisionMoraleImpact > 10) decisionMoraleImpact = 10;
       if (decisionMoraleImpact < -10) decisionMoraleImpact = -10;
-      const preMorale = Math.max(0, Math.min(state.morale + decisionMoraleImpact, 100));
+      const preMorale = Math.max(0, Math.min(freshState.morale + decisionMoraleImpact, 100));
 
-      const preCompanyState = { ...company };
+      const preCompanyState = { ...freshCompany };
 
-      let currentMaturity = company?.aiMaturityScore || 0;
+      let currentMaturity = freshCompany?.aiMaturityScore || 0;
       let maturityMultiplier = 1;
       if (currentMaturity > 95) maturityMultiplier = 0.1;
       else if (currentMaturity > 85) maturityMultiplier = 0.25;
@@ -469,22 +484,22 @@ export const useGameLoop = () => {
       else if (currentAutomation > 50) automationMultiplier = 0.8;
 
       actions.updateCompany({
-        aiInvestment: (company?.aiInvestment || 0) + decision.cost,
+        aiInvestment: (freshCompany?.aiInvestment || 0) + decision.cost,
         aiMaturityScore: Math.min(currentMaturity + (decision.aiMaturityGain * maturityMultiplier), 100),
         automationRate: Math.min(currentAutomation + (decision.automationGain * automationMultiplier), 100),
-        trainingHours: (company?.trainingHours || 0) + decision.trainingGain,
-        deploymentCount: (company?.deploymentCount || 0) + decision.deploymentGain
+        trainingHours: (freshCompany?.trainingHours || 0) + decision.trainingGain,
+        deploymentCount: (freshCompany?.deploymentCount || 0) + decision.deploymentGain
       });
 
-      const nextQuarter = state.currentQuarter + 1;
+      const nextQuarter = freshState.currentQuarter + 1;
       const willYearChange = nextQuarter > 2; // FIXED to exactly 2 quarters
-      const nextYear = willYearChange ? state.currentYear + 1 : state.currentYear;
+      const nextYear = willYearChange ? freshState.currentYear + 1 : freshState.currentYear;
 
-      const allCurrentOptions = DECISIONS.filter(d => state.currentDecisions.includes(d.id));
+      const allCurrentOptions = DECISIONS.filter(d => freshState.currentDecisions.includes(d.id));
       const maxRoi = Math.max(...allCurrentOptions.map(d => d.roiImpact));
       const isBest = decision.roiImpact === maxRoi;
       
-      let nextStreak = isBest ? state.bestDecisionStreak + 1 : 0;
+      let nextStreak = isBest ? freshState.bestDecisionStreak + 1 : 0;
       let nextCeoHelpTriggered = false;
       if (nextStreak === 2) {
         nextCeoHelpTriggered = true;
@@ -500,19 +515,19 @@ export const useGameLoop = () => {
         bestDecisionStreak: nextStreak,
       });
 
-      const unpickedDecisions = DECISIONS.filter(d => state.currentDecisions.includes(d.id) && d.id !== decisionId);
+      const unpickedDecisions = DECISIONS.filter(d => freshState.currentDecisions.includes(d.id) && d.id !== decisionId);
 
       // 3. Fetch simulated report representing quarter metrics first
-      const reportResults = await fetchQuarterReport(decision, unpickedDecisions, preCompanyState, state.currentQuarter, state.currentYear);
+      const reportResults = await fetchQuarterReport(decision, unpickedDecisions, preCompanyState, freshState.currentQuarter, freshState.currentYear);
       
-      const freshState = useGameStore.getState().state;
+      const postReportState = useGameStore.getState().state;
       const finalBudget = reportResults?.nextBudget ?? preBudget;
-      const finalRoi = reportResults?.calculatedRoi ?? state.roi;
-      const finalRevenue = reportResults?.annualizedRevenue ?? state.revenue;
+      const finalRoi = reportResults?.calculatedRoi ?? freshState.roi;
+      const finalRevenue = reportResults?.annualizedRevenue ?? freshState.revenue;
 
       let isGameOver = false;
       let gameResult: 'victory' | 'bankruptcy' | null = null;
-      let newEmergencyQuarters = state.emergencyQuarters || 0;
+      let newEmergencyQuarters = freshState.emergencyQuarters || 0;
 
       // Bankruptcy logic: 
       // 1. Immediate game over if cash drops below -$500k
@@ -531,26 +546,37 @@ export const useGameLoop = () => {
         newEmergencyQuarters = 0;
       }
 
-      if (!isGameOver && state.currentYear >= 2035) {
+      if (!isGameOver && nextYear >= 2035) {
         isGameOver = true;
         gameResult = 'victory';
       }
 
       // History tracking: log a data point for EVERY quarter that just completed
-      // (state.* here is the pre-advance closure, i.e. the quarter we just played)
+      // (freshState.* here is the pre-advance closure, i.e. the quarter we just played)
       // Check to prevent duplicate quarter entries
-      const updatedHistory = [...state.history];
-      const isDuplicate = updatedHistory.some(h => h.year === state.currentYear && h.quarter === state.currentQuarter);
+      const updatedHistory = [...freshState.history];
+      const isDuplicate = updatedHistory.some(h => h.year === freshState.currentYear && h.quarter === freshState.currentQuarter);
       
       if (!isDuplicate) {
         updatedHistory.push({
-          year: state.currentYear,
-          quarter: state.currentQuarter,
-          revenue: finalRevenue,
-          budget: finalBudget,
+          year: freshState.currentYear,
+          quarter: freshState.currentQuarter,
+          openingBudget: preBudget + decision.cost, // before anything is subtracted
+          openingRevenue: freshState.revenue,
+          openingEmployees: freshState.employees,
+          aiInvestment: decision.cost,
+          opCosts: reportResults?.opCosts || 0,
+          payroll: reportResults?.payroll || 0,
+          revenue: finalRevenue, // This is closing revenue
+          budget: finalBudget,   // This is closing budget
           roi: finalRoi,
-          morale: freshState.morale,
+          decisionRoi: reportResults?.decisionRoi,
+          appliedRevenue: reportResults?.appliedRevenue,
+          riskScore: reportResults?.riskScore ?? 50,
+          morale: postReportState.morale,
           employees: reportResults?.nextEmployees ?? nextEmployees,
+          employeesHired: (decision.employeeGain > 0 ? decision.employeeGain : 0) + (reportResults?.employeesHired ?? 0),
+          employeesLost: (decision.employeeGain < 0 ? Math.abs(decision.employeeGain) : 0) + (reportResults?.employeesLost ?? 0),
           decision: decision.title
         });
       }
@@ -560,7 +586,7 @@ export const useGameLoop = () => {
         emergencyQuarters: newEmergencyQuarters,
         isGameOver,
         gameResult,
-        ceoHelpTriggered: nextCeoHelpTriggered ? true : state.ceoHelpTriggered
+        ceoHelpTriggered: nextCeoHelpTriggered ? true : freshState.ceoHelpTriggered
       });
 
       if (isGameOver) {
